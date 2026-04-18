@@ -2,68 +2,135 @@ import {
   getLatestReleaseStepInput,
   type GetLatestReleaseStepOutput,
   setLatestReleaseStepOutput,
-  getDeployStepInput
+  getDeployStepInput,
 } from "@levibostian/decaf-sdk";
 import $ from "@david/dax";
+import { parseArgs } from "@std/cli";
 
 interface ScriptDataSavedToFile {
   githubReleaseAssets: string[];
 }
 const getFileToSaveScriptDataTo = (): string => {
   const tempDir = Deno.env.get("TMPDIR") || Deno.env.get("TMP") || "/tmp";
-    const assetsFilePath = `${tempDir}/decaf-script-github-releases-assets.json`;
+    const assetsFilePath = `${tempDir}/decaf-script-github-releases-release-branch-assets.json`;
   return assetsFilePath;
 }
 
-export const getLatestReleaseFromGitHubReleases = async (): Promise<GetLatestReleaseStepOutput | null> => {
+export const getLatestReleaseFromGitHubReleases = async (
+  releaseBranch: string,
+): Promise<GetLatestReleaseStepOutput | null> => {
   const input = getLatestReleaseStepInput();
 
-  const latestGitTagCommit = input.gitCommitsCurrentBranch.filter((commit) => commit.tags?.length)[0]
-  if (!latestGitTagCommit) {
-    console.log("No git tags found on the current branch. Therefore, there has never been a release on this branch.");
-    return null
-  }
-
-  const latestGitTag = latestGitTagCommit!.tags![0];
-
-  console.log(`Latest git tag on the current branch is: ${latestGitTag}`);
-
-  const latestReleasesGitHubJsonString = Deno.env.get("MOCK_GITHUB_RELEASES") || await $`gh release list --exclude-drafts --order desc --json name,tagName`.text()
-  const latestReleasesGitHub = JSON.parse(latestReleasesGitHubJsonString) as { name: string; tagName: string }[];
+  const latestReleasesGitHubJsonString =
+    Deno.env.get("MOCK_GITHUB_RELEASES") ||
+    await $`gh release list --exclude-drafts --order desc --json name,tagName`
+      .text();
+  const latestReleasesGitHub = JSON.parse(latestReleasesGitHubJsonString) as {
+    name: string;
+    tagName: string;
+  }[];
 
   if (!latestReleasesGitHub.length) {
-    console.log(`No GitHub Releases found in the GitHub repository. Perhaps this is a mistake, since there is a git tag on the current branch but no GitHub Release for that tag? I suggest making a GitHub Release for the git tag, ${latestGitTag}, and then re-running the deployment.`);
-    return null
+    console.log(
+      "No GitHub Releases found in the GitHub repository.",
+    );
+    return null;
   }
 
-  const latestRelease = latestReleasesGitHub.find((release) => release.tagName === latestGitTag);
+  const latestRelease = latestReleasesGitHub[0];
 
-  if (!latestRelease) {
-    console.log(`No GitHub Release found for the latest git tag on the current branch, ${latestGitTag}. Perhaps this is a mistake? I suggest making a GitHub Release for the git tag, ${latestGitTag}, and then re-running the deployment.`);
-    return null
+  console.log(
+    `Latest GitHub release: ${latestRelease.name} (${latestRelease.tagName})`,
+  );
+
+  // Get the commits for the release branch
+  const releaseBranchCommits =
+    input.gitCommitsAllLocalBranches[releaseBranch];
+
+  if (!releaseBranchCommits || releaseBranchCommits.length === 0) {
+    console.log(
+      `Could not find commits for release branch: ${releaseBranch}. Cannot determine latest release.`,
+    );
+    return null;
+  }
+
+  // Find the commit for the latest release tag on the release branch
+  const releaseCommitIndex = releaseBranchCommits.findIndex((commit) =>
+    commit.tags?.includes(latestRelease.tagName)
+  );
+
+  if (releaseCommitIndex === -1) {
+    console.log(
+      `Could not find commit for tag ${latestRelease.tagName} on release branch ${releaseBranch}.`,
+    );
+    return null;
+  }
+
+  const releaseCommit = releaseBranchCommits[releaseCommitIndex];
+  console.log(
+    `Found release commit on branch ${releaseBranch}: ${releaseCommit.sha}`,
+  );
+
+  // Build a set of SHAs from the current branch for quick lookup
+  const currentBranchShas = new Set(
+    input.gitCommitsCurrentBranch.map((c) => c.sha),
+  );
+
+  // Starting at the release commit, walk backwards (older) through release branch commits
+  // to find the first commit that also exists on the current branch
+  for (let i = releaseCommitIndex; i < releaseBranchCommits.length; i++) {
+    const releaseBranchCommit = releaseBranchCommits[i];
+    if (currentBranchShas.has(releaseBranchCommit.sha)) {
+      console.log(
+        `Found common commit between release branch and current branch: ${releaseBranchCommit.sha}`,
+      );
+      return {
+        versionName: latestRelease.name,
+        commitSha: releaseBranchCommit.sha,
+      };
+    }
   }
 
   console.log(
-    `latest release found: ${latestRelease.name} (${latestRelease.tagName})`,
+    "Could not find a common commit between the release branch and the current branch.",
   );
+  return null;
+};
 
-  const commitMatchingRelease = input.gitCommitsCurrentBranch.find((commit) => {
-    return commit.tags?.includes(latestRelease.tagName);
-  })!;
-
-  console.log(
-    `commit matching release found: ${commitMatchingRelease.title} (${commitMatchingRelease.sha})`,
-  );
-
-  return {
-    versionName: latestRelease.name,
-    commitSha: commitMatchingRelease.sha,
-  }
-}
-
-export const createGitHubRelease = async (customArgs: string[] = []): Promise<void> => {
+export const createGitHubRelease = async (args: string[] = []): Promise<void> => {
   const input = getDeployStepInput();
-  
+  const releaseInput = getLatestReleaseStepInput();
+
+  // --release-branch is required; all other args are forwarded to `gh release create`
+  const parsed = parseArgs(args, {
+    string: ["release-branch"],
+    alias: { "release-branch": "r" },
+  });
+
+  const releaseBranch = parsed["release-branch"];
+  if (!releaseBranch) {
+    console.error("Error: --release-branch is required for the set command");
+    console.error("Usage: script.ts set --release-branch <branch> [gh args...]");
+    Deno.exit(1);
+  }
+
+  // Get the latest commit on the release branch from the input data
+  const releaseBranchCommits = releaseInput.gitCommitsAllLocalBranches[releaseBranch];
+  if (!releaseBranchCommits || releaseBranchCommits.length === 0) {
+    console.error(`Could not find commits for release branch: ${releaseBranch}. Cannot determine target commit.`);
+    Deno.exit(1);
+  }
+  const latestReleaseBranchCommit = releaseBranchCommits[0].sha;
+
+  // Build gh passthrough args from parsed, simply by dropping the release-branch key
+  const { "release-branch": _rb, r: _r, _: positionals, ...ghFlags } = parsed;
+  const ghArgs = [
+    ...Object.entries(ghFlags).flatMap(([key, val]) =>
+      val === true ? [`--${key}`] : [`--${key}`, String(val)]
+    ),
+    ...positionals.map(String),
+  ];
+
   // Get assets from temp file created by set-assets command
   let githubReleaseAssets: string[] = [];
   try {
@@ -73,34 +140,26 @@ export const createGitHubRelease = async (customArgs: string[] = []): Promise<vo
   } catch {
     // No temp file or error reading it, continue with empty assets
   }
-  
-  // Get current branch from input
-  const currentBranch = input.gitCurrentBranch;
-  
-  let argsToCreateGithubRelease: string[];
-  
-  if (customArgs.length > 0) {
-    // User provided custom arguments, use them directly
-    argsToCreateGithubRelease = [
-      'release',
-      'create',
-      input.nextVersionName,
-      ...customArgs,
-      ...githubReleaseAssets,
-    ];
-  } else {
-    // Use default arguments
-    argsToCreateGithubRelease = [
-      'release',
-      'create', 
-      input.nextVersionName,
-      '--generate-notes',
-      '--latest',
-      '--target',
-      currentBranch,
-      ...githubReleaseAssets,
-    ];
+
+  // Use caller-supplied args, or fall back to sensible defaults
+  const baseArgs = ghArgs.length > 0 ? ghArgs : ["--generate-notes", "--latest"];
+
+  // Append --target <latest-release-branch-commit> unless the caller already supplied it
+  const hasTarget = parsed["target"] !== undefined;
+
+  const targetArgs = hasTarget ? [] : ["--target", latestReleaseBranchCommit];
+  if (!hasTarget) {
+    console.log(`Targeting latest commit on branch ${releaseBranch}: ${latestReleaseBranchCommit}`);
   }
+
+  const argsToCreateGithubRelease = [
+    "release",
+    "create",
+    input.nextVersionName,
+    ...baseArgs,
+    ...targetArgs,
+    ...githubReleaseAssets,
+  ];
 
   if (input.testMode) {
     console.log("Running in test mode, skipping creating GitHub release.");
@@ -147,30 +206,38 @@ export const setGitHubReleaseAssets = async (assets: string[]): Promise<void> =>
 function showHelp() {
   console.log(`
 Usage: 
-  script.ts get                           # Get the latest release (default behavior)
-  script.ts set [args...]                 # Set/create a GitHub release
-  script.ts set-assets <asset1> [asset2...]  # Set GitHub release assets
-  script.ts get-latest-release            # Alias for 'get'
-  script.ts set-latest-release [args...]  # Alias for 'set'
-  script.ts set-github-release-assets <asset1> [asset2...]  # Alias for 'set-assets'
+  script.ts get --release-branch <branch>              # Get the latest release
+  script.ts set --release-branch <branch> [args...]    # Set/create a GitHub release
+  script.ts set-assets <asset1> [asset2...]            # Set GitHub release assets
+  script.ts get-latest-release --release-branch <branch>            # Alias for 'get'
+  script.ts set-latest-release --release-branch <branch> [args...]  # Alias for 'set'
+  script.ts set-github-release-assets <asset1> [asset2...]          # Alias for 'set-assets'
 
 Commands:
-  get, get-latest-release                Get the latest GitHub release that matches a git tag on the current branch
-  set, set-latest-release                Create a new GitHub release
+  get, get-latest-release                Get the latest common GitHub release between the release branch and the current branch
+  set, set-latest-release                Create a new GitHub release targeting the latest remote commit on the release branch
   set-assets, set-github-release-assets  Set GitHub release assets for future release creation
+
+Required flags for get and set:
+  --release-branch, -r <branch>  The release branch to use
+
+Notes for set:
+  --target is automatically set to the latest remote commit on the release branch.
+  You may override it by passing --target explicitly.
 
 Examples:
   # Get latest release
-  script.ts get
-  script.ts get-latest-release
+  script.ts get --release-branch release/v1
+  script.ts get-latest-release --release-branch release/v1
 
   # Create release with default settings
-  script.ts set
-  script.ts set-latest-release
+  script.ts set --release-branch release/v1
+  script.ts set-latest-release --release-branch release/v1
 
-  # Create release with custom arguments
-  script.ts set --generate-notes --latest --target main
-  script.ts set-latest-release --draft --notes "Custom release notes"
+  # Create release with custom arguments (--target auto-appended unless provided)
+  script.ts set --release-branch release/v1 --generate-notes --latest
+  script.ts set --release-branch release/v1 --draft --notes "Custom release notes"
+  script.ts set --release-branch release/v1 --target my-sha  # explicit --target, not overridden
 
   # Set assets for future release
   script.ts set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
@@ -185,13 +252,31 @@ if (import.meta.main) {
     Deno.exit(0);
   }
 
-  const command = Deno.args.length > 0 ? Deno.args[0] : "get";
+  const command = Deno.args.length > 0 ? Deno.args[0] : "";
   const commandArgs = Deno.args.slice(1);
 
   switch (command) {
     case "get":
     case "get-latest-release": {
-      const latestRelease = await getLatestReleaseFromGitHubReleases();
+      const parsedArgs = parseArgs(commandArgs, {
+        string: ["release-branch"],
+        alias: { "release-branch": "r" },
+      });
+
+      const releaseBranch = parsedArgs["release-branch"];
+      if (!releaseBranch) {
+        console.error(
+          "Error: --release-branch is required for the get command",
+        );
+        console.error(
+          "Usage: script.ts get --release-branch <branch>",
+        );
+        Deno.exit(1);
+      }
+
+      const latestRelease = await getLatestReleaseFromGitHubReleases(
+        releaseBranch,
+      );
       if (latestRelease) {
         setLatestReleaseStepOutput(latestRelease);
       }

@@ -10,7 +10,7 @@ If you use GitHub's Releases feature to store and track the versions that you de
 
 This script provides functionality to:
 
-1. **Get the latest release** - Finds the most recent GitHub Release that matches a git tag on the current branch
+1. **Get the latest release** - Finds the most recent GitHub Release that is shared between a release branch and the current branch
 2. **Set/create a release** - Creates a new GitHub Release with configurable options
 
 # Getting Started
@@ -24,8 +24,8 @@ Here are some simple examples for how to run this script with decaf on GitHub Ac
 ```yaml
 - uses: levibostian/decaf
   with:
-    get_latest_release_current_branch: npx @levibostian/decaf-script-github-releases get
-    deploy: your-script-here && npx @levibostian/decaf-script-github-releases set
+    get_latest_release_current_branch: npx @levibostian/decaf-script-github-releases-release-branch get --release-branch main
+    deploy: your-script-here && npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main
     # Other decaf arguments...
 ```
 
@@ -33,8 +33,8 @@ Here are some simple examples for how to run this script with decaf on GitHub Ac
 
 ```bash
 decaf \
-  --get-latest-release-current-branch "npx @levibostian/decaf-script-github-releases get" \
-  --deploy "your-script-here && npx @levibostian/decaf-script-github-releases set"
+  --get-latest-release-current-branch "npx @levibostian/decaf-script-github-releases-release-branch get --release-branch main" \
+  --deploy "your-script-here && npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main"
 ```
 
 > Note: Replace `your-script-here` with whatever commands you need to run as part of the deployment process before creating the release. Be sure to run the script *last* because once you create the release, decaf will consider the deployment successful and if you re-run decaf, it will not attempt to re-attempt the deployment.
@@ -46,8 +46,8 @@ The above examples use `npx` and are arguably the easiest way to run the script.
 1. **Run with Deno** (requires Deno installed)
 
 ```yaml
-get_latest_release_current_branch: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases get
-deploy: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases set
+get_latest_release_current_branch: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases-release-branch get --release-branch main
+deploy: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases-release-branch set --release-branch main
 ```
 
 2. **Run as a compiled binary**
@@ -55,28 +55,59 @@ deploy: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releas
 Great option that doesn't depend on node or deno. This just installs a binary from GitHub and runs it for your operating system.
 
 ```yaml
-get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases get
-deploy: curl -fsSL https://github.com/levibostian/decaf-script-github-releases/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases set
+get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases-release-branch/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases-release-branch get --release-branch main
+deploy: curl -fsSL https://github.com/levibostian/decaf-script-github-releases-release-branch/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases-release-branch set --release-branch main
 
 # Or, always run the latest version (less stable, but always up-to-date)
-get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases/blob/HEAD/install?raw=true | bash && ./decaf-script-github-releases get
+get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases-release-branch/blob/HEAD/install?raw=true | bash && ./decaf-script-github-releases-release-branch get --release-branch main
 ```
 
 # Commands
 
 ### Get Latest Release
 
-In your *get latest release* script for decaf, use the `get` (or `get-latest-release`) command to fetch the latest GitHub Release for the current branch. 
+In your *get latest release* script for decaf, use the `get` (or `get-latest-release`) command to find the latest GitHub Release that is common between a release branch and the current branch.
 
-If your GitHub repository...
-- ...has a newer git tag then the latest release, this script will return the release, not the tag. 
-- ...has no releases, it will return nothing, indicating that there is no latest release. 
-- ...has newer GitHub Releases then the current branch's latest git tag, it will return the older GitHub Release that matches the latest git tag on the current branch.
+**Required flag:** `--release-branch <branch>` (alias: `-r`) — the name of the release branch to compare against.
+
+#### How it works
+
+```mermaid
+gitGraph LR:
+   commit id: "A"
+   commit id: "B"
+   branch release/v1
+   checkout release/v1
+   commit id: "C"
+   commit id: "D (tag: v1.0.0 → GitHub Release)" tag: "v1.0.0"
+   commit id: "E"
+   checkout main
+   commit id: "F"
+   commit id: "G (current)"
+```
+
+The key insight is that **the commit returned is on the current branch**, not the release branch. Even though the GitHub Release points to a commit on `release/v1`, the script walks back through the release branch history to find the most recent commit that also lives on your current branch — in this example, commit `B`.
+
+That shared commit is what decaf uses to know *"everything after B on the current branch is unreleased work."*
+
+Step by step:
+
+1. Fetches the latest GitHub Release from the repository.
+2. Locates the commit for that release's tag on the **release branch** (not the current branch). If the tag is not found on the release branch, the script logs a message and exits.
+3. Starting at that release tag commit, walks backwards through the release branch's commit history (oldest first).
+4. For each release branch commit, checks whether that same commit SHA also exists on the current branch.
+5. Returns the first common commit found, together with the GitHub Release name.
+6. If no common commit is found, the script logs a message and returns nothing.
+
+This approach ensures that when you are running on a separate branch (e.g. `main`), you correctly identify the most recent release that your branch shares history with — even though the release itself was created on a dedicated release branch.
 
 Example usage:
 
 ```bash 
-npx @levibostian/decaf-script-github-releases get
+npx @levibostian/decaf-script-github-releases-release-branch get --release-branch release/v1
+
+# Short alias for --release-branch
+npx @levibostian/decaf-script-github-releases-release-branch get -r release/v1
 ```
 
 ### Set/Create Release
@@ -91,10 +122,10 @@ Example usage:
 
 ```bash
 # Use the default settings to create the release
-npx @levibostian/decaf-script-github-releases set
+npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main
 
 # Or, with custom GitHub CLI arguments
-npx @levibostian/decaf-script-github-releases set --draft --target {{gitCurrentBranch}}
+npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main --draft
 ```
 
 ### Set GitHub Release Assets
@@ -110,10 +141,8 @@ Example usage:
 ```bash
 # After your deployment script runs, set the assets to upload. 
 # Each asset follows the format: `"path/to/file#Display Name"`
-npx @levibostian/decaf-script-github-releases set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
+npx @levibostian/decaf-script-github-releases-release-branch set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
 
 # Then create the release (it will automatically include the assets)
-npx @levibostian/decaf-script-github-releases set
+npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main
 ```
-
-

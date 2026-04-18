@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="levibostian/decaf-script-github-releases"
-BINARY_NAME="decaf-script-github-releases"
+REPO="levibostian/decaf-script-github-releases-release-branch"
+BINARY_NAME="decaf-script-github-releases-release-branch"
 
 echo "Fetching latest release version from GitHub..."
 LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
@@ -33,4 +33,4 @@ fi
 chmod +x "$DEST"
 
 echo "Install complete! Run the tool with:"
-echo "  ./decaf-script-github-releases [args]"
+echo "  ./decaf-script-github-releases-release-branch [args]"

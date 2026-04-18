@@ -1,470 +1,676 @@
 import type {
   GetLatestReleaseStepInput,
-  GetLatestReleaseStepOutput,
   DeployStepInput,
   GitCommit,
 } from "@levibostian/decaf-sdk";
-import { assertEquals, assertStringIncludes } from "@std/assert"
+import {
+  runGetLatestReleaseScript,
+  runDeployScript,
+} from "@levibostian/decaf-sdk/testing";
+import { mockBin } from "@levibostian/mock-a-bin";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 
-// a decaf script test runner essentially. Copied from decaf: https://github.com/levibostian/decaf/blob/a0e324f7209c0f37b9d275b7259fcefd591a17c6/steps/get-next-release.test.ts#L4
-// would be nice to put into decaf or the sdks in the future. 
-async function runScript(input: GetLatestReleaseStepInput | DeployStepInput, args: string[], mockGitHubReleases: {name: string; tagName: string}[]): Promise<{code: number; output: GetLatestReleaseStepOutput | null, stdout: string}> {
-  // make test mode always enabled. instead of mocking running commands, we rely on the testMode flag to not actually run commands.
-  input.testMode = true;
-
-  // Write input to a temp file
-  const tempFile = await Deno.makeTempFile()
-  const inputFileContents = JSON.stringify(input)
-  await Deno.writeTextFile(tempFile, inputFileContents)
-
-  // Get absolute path to get-next-release.ts
-  const scriptPath = new URL("./script.ts", import.meta.url).pathname
-
-  const env: Record<string, string> = { 
-    INPUT_GITHUB_TOKEN: "", 
-    DATA_FILE_PATH: tempFile, 
-    ...Deno.env.toObject() 
-  };
-  
-  env.MOCK_GITHUB_RELEASES = JSON.stringify(mockGitHubReleases);
-
-  const process = new Deno.Command("deno", {
-    args: ["run", "--allow-all", scriptPath, ...args],
-    env,
-    stdout: "piped",
-    stderr: "piped",
-  })
-
-  const child = process.spawn()
-  const { code, stdout, stderr } = await child.output()
-  
-  const outputFileContents = await Deno.readTextFile(tempFile)
-  let output: GetLatestReleaseStepOutput | null = null
-  if (outputFileContents != inputFileContents) {
-    output = JSON.parse(outputFileContents)
-  }
-
-  // Combine stdout and stderr for the test assertions
-  const combinedOutput = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr)
-
-  return { code, output, stdout: combinedOutput }
+// Helper: join stdout lines into a single string for partial-match assertions.
+function stdoutText(lines: string[]): string {
+  return lines.join("\n");
 }
 
-Deno.test("given no tags on the current branch, expect null for latest release", async () => {
-  const input: GetLatestReleaseStepInput = {
-    gitCurrentBranch: "main",
-    gitRepoOwner: "levibostian",
-    gitRepoName: "decaf-script-github-releases",
-        gitCommitsCurrentBranch: [
-      {
-        sha: "abc1",
-        title: "Initial commit",
-        tags: [],
-        message: "Initial commit",
+// ---------------------------------------------------------------------------
+// tests not for a specific command
+// ---------------------------------------------------------------------------
+
+Deno.test(
+  "no command specified should exit with error about missing command",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {},
+    } as unknown as GetLatestReleaseStepInput;
+
+    const { code, stdout } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts",
+      input,
+    );
+
+    assertEquals(code, 1);
+    assertStringIncludes(stdoutText(stdout), "Unknown command");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// get command - release-branch logic
+// ---------------------------------------------------------------------------
+
+Deno.test(
+  "get command without --release-branch should exit with error",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [],
+      gitCommitsAllLocalBranches: {},
+    } as unknown as GetLatestReleaseStepInput;
+
+    const { code, stdout } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get",
+      input,
+    );
+
+    assertEquals(code, 1);
+    assertStringIncludes(stdoutText(stdout), "--release-branch is required");
+  },
+);
+
+Deno.test(
+  "given no GitHub releases, expect null for latest release",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "abc1", title: "Initial commit", tags: [], message: "Initial commit" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {
+        "release/v1": [
+          { sha: "def1", title: "Release commit", tags: ["v1.0.0"], message: "Release" },
+        ] as unknown as GitCommit[],
       },
-      {
-        sha: "abc2",
-        title: "Add feature",
-        tags: [],
-        message: "Add feature",
-      }
-    ] as unknown as GitCommit[],
-    gitCommitsAllLocalBranches: {}
-  } as unknown as GetLatestReleaseStepInput;
+    } as unknown as GetLatestReleaseStepInput;
 
-  const { code, output } = await runScript(input, ["get"], [])
+    const { code, output } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get --release-branch release/v1",
+      input,
+      { extraEnvVariables: { MOCK_GITHUB_RELEASES: JSON.stringify([]) } },
+    );
 
-  assertEquals(code, 0)
-  assertEquals(output, null)
-})
+    assertEquals(code, 0);
+    assertEquals(output, null);
+  },
+);
 
-Deno.test("given git tags exist and matching GitHub release exists, expect release info", async () => {
-  const input: GetLatestReleaseStepInput = {
-    gitCurrentBranch: "main",
-    gitRepoOwner: "levibostian",
-    gitRepoName: "decaf-script-github-releases",
-        gitCommitsCurrentBranch: [
-      {
-        sha: "abc1",
-        title: "Initial commit",
-        tags: [],
-        message: "Initial commit",
+Deno.test(
+  "given latest GitHub release tag not found on release branch, expect null with log message",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "abc1", title: "main commit", tags: [], message: "main" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {
+        "release/v1": [
+          { sha: "def1", title: "old release", tags: ["v1.0.0"], message: "old" },
+        ] as unknown as GitCommit[],
       },
+    } as unknown as GetLatestReleaseStepInput;
+
+    const { code, output, stdout } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get --release-branch release/v1",
+      input,
       {
-        sha: "abc2",
-        title: "Release v1.0.0",
-        tags: ["v1.0.0"],
-        message: "Release v1.0.0",
-      }
-    ] as unknown as GitCommit[],
-    gitCommitsAllLocalBranches: {}
-  } as unknown as GetLatestReleaseStepInput;
-
-  const { code, output } = await runScript(input, ["get"], [
-    { name: "Release v1.0.0", tagName: "v1.0.0" },
-    { name: "Release v0.9.0", tagName: "v0.9.0" }
-  ])
-
-  assertEquals(code, 0)
-  assertEquals(output, {
-    versionName: "Release v1.0.0",
-    commitSha: "abc2"
-  })
-})
-
-Deno.test("given multiple commits with tags, should use the first (latest) commit with tags", async () => {
-  const input: GetLatestReleaseStepInput = {
-    gitCurrentBranch: "main",
-    gitRepoOwner: "levibostian",
-    gitRepoName: "decaf-script-github-releases",
-        gitCommitsCurrentBranch: [     
-      {
-        sha: "abc2",
-        title: "Release v2.0.0",
-        tags: ["v2.0.0"],
-        message: "Release v2.0.0",
+        extraEnvVariables: {
+          MOCK_GITHUB_RELEASES: JSON.stringify([
+            { name: "Release v2.0.0", tagName: "v2.0.0" },
+          ]),
+        },
       },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(output, null);
+    assertStringIncludes(
+      stdoutText(stdout),
+      "Could not find commit for tag v2.0.0 on release branch release/v1",
+    );
+  },
+);
+
+Deno.test(
+  "given release branch not in gitCommitsAllLocalBranches, expect null with log message",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "abc1", title: "main commit", tags: [], message: "main" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {},
+    } as unknown as GetLatestReleaseStepInput;
+
+    const { code, output, stdout } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get --release-branch release/v1",
+      input,
       {
-        sha: "abc3",
-        title: "Release v1.0.0",
-        tags: ["v1.0.0"],
-        message: "Release v1.0.0",
+        extraEnvVariables: {
+          MOCK_GITHUB_RELEASES: JSON.stringify([
+            { name: "Release v1.0.0", tagName: "v1.0.0" },
+          ]),
+        },
       },
-      {
-        sha: "abc1",
-        title: "Initial commit",
-        tags: [],
-        message: "Initial commit",
+    );
+
+    assertEquals(code, 0);
+    assertEquals(output, null);
+    assertStringIncludes(
+      stdoutText(stdout),
+      "Could not find commits for release branch: release/v1",
+    );
+  },
+);
+
+Deno.test(
+  "given release commit is also on the current branch, expect that commit as result",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "abc2", title: "main ahead commit", tags: [], message: "ahead" },
+        { sha: "shared1", title: "shared base commit", tags: [], message: "shared" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {
+        "release/v1": [
+          { sha: "shared1", title: "shared base commit", tags: ["v1.0.0"], message: "shared" },
+          { sha: "older1", title: "older release commit", tags: [], message: "older" },
+        ] as unknown as GitCommit[],
       },
-    ] as unknown as GitCommit[],
-    gitCommitsAllLocalBranches: {}
-  } as unknown as GetLatestReleaseStepInput;
+    } as unknown as GetLatestReleaseStepInput;
 
-  const { code, output } = await runScript(input, ["get"], [
-    { name: "Release v2.0.0", tagName: "v2.0.0" },
-    { name: "Release v1.0.0", tagName: "v1.0.0" }
-  ])
-
-  assertEquals(code, 0)
-  assertEquals(output, {
-    versionName: "Release v2.0.0",
-    commitSha: "abc2"
-  })
-})
-
-Deno.test("given git tags exist but no GitHub releases, expect null", async () => {
-  const input: GetLatestReleaseStepInput = {
-    gitCurrentBranch: "main",
-    gitRepoOwner: "levibostian",
-    gitRepoName: "decaf-script-github-releases",
-        gitCommitsCurrentBranch: [
+    const { code, output } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get --release-branch release/v1",
+      input,
       {
-        sha: "abc1",
-        title: "Initial commit",
-        tags: [],
-        message: "Initial commit",
+        extraEnvVariables: {
+          MOCK_GITHUB_RELEASES: JSON.stringify([
+            { name: "Release v1.0.0", tagName: "v1.0.0" },
+          ]),
+        },
       },
-      {
-        sha: "abc2",
-        title: "Release v1.0.0",
-        tags: ["v1.0.0"],
-        message: "Release v1.0.0",
-      }
-    ] as unknown as GitCommit[],
-    gitCommitsAllLocalBranches: {}
-  } as unknown as GetLatestReleaseStepInput;
+    );
 
-  // Mock no GitHub releases
-  const { code, output } = await runScript(input, ["get"], [])
+    assertEquals(code, 0);
+    assertEquals(output, {
+      versionName: "Release v1.0.0",
+      commitSha: "shared1",
+    });
+  },
+);
 
-  assertEquals(code, 0)
-  assertEquals(output, null)
-})
-
-Deno.test("given git tags exist and GitHub releases exist but no matching release for latest tag, expect null", async () => {
-  const input: GetLatestReleaseStepInput = {
-    gitCurrentBranch: "main",
-    gitRepoOwner: "levibostian",
-    gitRepoName: "decaf-script-github-releases",
-        gitCommitsCurrentBranch: [
-      {
-        sha: "abc1",
-        title: "Initial commit",
-        tags: [],
-        message: "Initial commit",
+Deno.test(
+  "given release commit is NOT on current branch but an older release branch commit is, expect the older common commit",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "mainOnly", title: "main-only commit", tags: [], message: "main only" },
+        { sha: "common1", title: "common ancestor", tags: [], message: "common" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {
+        "release/v1": [
+          { sha: "releaseOnly", title: "release-only tag commit", tags: ["v1.0.0"], message: "release tag" },
+          { sha: "common1", title: "common ancestor", tags: [], message: "common" },
+          { sha: "oldest1", title: "oldest", tags: [], message: "oldest" },
+        ] as unknown as GitCommit[],
       },
+    } as unknown as GetLatestReleaseStepInput;
+
+    const { code, output, stdout } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get --release-branch release/v1",
+      input,
       {
-        sha: "abc2",
-        title: "Release v2.0.0",
-        tags: ["v2.0.0"],
-        message: "Release v2.0.0",
-      }
-    ] as unknown as GitCommit[],
-    gitCommitsAllLocalBranches: {}
-  } as unknown as GetLatestReleaseStepInput;
-
-  // Mock GitHub releases that don't match the latest tag
-  const mockReleases = [
-    { name: "Release v1.0.0", tagName: "v1.0.0" },
-    { name: "Release v1.1.0", tagName: "v1.1.0" }
-  ];
-
-  const { code, output } = await runScript(input, ["get"], mockReleases)
-
-  assertEquals(code, 0)
-  assertEquals(output, null)
-})
-
-Deno.test("given on a maintenance branch with newer releases available on main branch, expect release matching latest tag on maintenance branch", async () => {
-  const input: GetLatestReleaseStepInput = {
-    gitCurrentBranch: "v1", // a maintenance branch
-    gitRepoOwner: "levibostian",
-    gitRepoName: "decaf-script-github-releases",
-        gitCommitsCurrentBranch: [      
-      {
-        sha: "abc2",
-        title: "Patch release v1.5.1",
-        tags: ["v1.5.1"],
-        message: "Patch release v1.5.1",
+        extraEnvVariables: {
+          MOCK_GITHUB_RELEASES: JSON.stringify([
+            { name: "Release v1.0.0", tagName: "v1.0.0" },
+          ]),
+        },
       },
-      {
-        sha: "abc1",
-        title: "Initial v1 branch commit",
-        tags: [],
-        message: "Initial v1 branch commit",
+    );
+
+    assertEquals(code, 0);
+    assertEquals(output, {
+      versionName: "Release v1.0.0",
+      commitSha: "common1",
+    });
+    assertStringIncludes(
+      stdoutText(stdout),
+      "Found common commit between release branch and current branch: common1",
+    );
+  },
+);
+
+Deno.test(
+  "given no common commit between release branch and current branch, expect null with log message",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "mainOnly1", title: "main commit 1", tags: [], message: "main 1" },
+        { sha: "mainOnly2", title: "main commit 2", tags: [], message: "main 2" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {
+        "release/v1": [
+          { sha: "releaseOnly1", title: "release tag commit", tags: ["v1.0.0"], message: "tag" },
+          { sha: "releaseOnly2", title: "older release commit", tags: [], message: "older" },
+        ] as unknown as GitCommit[],
       },
-    ] as unknown as GitCommit[],
-    gitCommitsAllLocalBranches: {}
-  } as unknown as GetLatestReleaseStepInput;
+    } as unknown as GetLatestReleaseStepInput;
 
-  // Mock GitHub releases including newer releases (v3.0.0, v2.0.0) but also the one matching our branch (v1.5.1)
-  const mockReleases = [
-    { name: "Release v3.0.0", tagName: "v3.0.0" }, // Newer release from main branch
-    { name: "Release v2.5.0", tagName: "v2.5.0" }, // Another newer release
-    { name: "Release v2.0.0", tagName: "v2.0.0" }, // Another newer release
-    { name: "Release v1.5.1", tagName: "v1.5.1" }, // The one we want - matches our maintenance branch
-    { name: "Release v1.5.0", tagName: "v1.5.0" }, // Older release on v1 branch
-    { name: "Release v1.0.0", tagName: "v1.0.0" }  // Even older release
-  ];
+    const { code, output, stdout } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get --release-branch release/v1",
+      input,
+      {
+        extraEnvVariables: {
+          MOCK_GITHUB_RELEASES: JSON.stringify([
+            { name: "Release v1.0.0", tagName: "v1.0.0" },
+          ]),
+        },
+      },
+    );
 
-  const { code, output } = await runScript(input, ["get"], mockReleases)
+    assertEquals(code, 0);
+    assertEquals(output, null);
+    assertStringIncludes(
+      stdoutText(stdout),
+      "Could not find a common commit between the release branch and the current branch",
+    );
+  },
+);
 
-  assertEquals(code, 0)
-  assertEquals(output, {
-    versionName: "Release v1.5.1",
-    commitSha: "abc2"
-  });
-});
+Deno.test(
+  "get-latest-release alias should work the same as get",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "shared1", title: "shared commit", tags: [], message: "shared" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {
+        "release/v1": [
+          { sha: "shared1", title: "shared commit", tags: ["v1.0.0"], message: "shared" },
+        ] as unknown as GitCommit[],
+      },
+    } as unknown as GetLatestReleaseStepInput;
 
-Deno.test("set command with default arguments should generate correct gh command", async () => {
-  const input = {
-    nextVersionName: "v1.0.0",
-    gitCurrentBranch: "foo"
+    const mockReleases = {
+      extraEnvVariables: {
+        MOCK_GITHUB_RELEASES: JSON.stringify([
+          { name: "Release v1.0.0", tagName: "v1.0.0" },
+        ]),
+      },
+    };
+
+    const { code: code1, output: output1 } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get --release-branch release/v1",
+      input,
+      mockReleases,
+    );
+    const { code: code2, output: output2 } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get-latest-release --release-branch release/v1",
+      input,
+      mockReleases,
+    );
+
+    assertEquals(code1, 0);
+    assertEquals(code2, 0);
+    assertEquals(output1, output2);
+  },
+);
+
+Deno.test(
+  "short alias -r should work for --release-branch",
+  async () => {
+    const input: GetLatestReleaseStepInput = {
+      gitCurrentBranch: "main",
+      gitRepoOwner: "levibostian",
+      gitRepoName: "decaf-script-github-releases-release-branch",
+      gitCommitsCurrentBranch: [
+        { sha: "shared1", title: "shared commit", tags: [], message: "shared" },
+      ] as unknown as GitCommit[],
+      gitCommitsAllLocalBranches: {
+        "release/v1": [
+          { sha: "shared1", title: "shared commit", tags: ["v1.0.0"], message: "shared" },
+        ] as unknown as GitCommit[],
+      },
+    } as unknown as GetLatestReleaseStepInput;
+
+    const { code, output } = await runGetLatestReleaseScript(
+      "deno run --allow-all script.ts get -r release/v1",
+      input,
+      {
+        extraEnvVariables: {
+          MOCK_GITHUB_RELEASES: JSON.stringify([
+            { name: "Release v1.0.0", tagName: "v1.0.0" },
+          ]),
+        },
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(output, {
+      versionName: "Release v1.0.0",
+      commitSha: "shared1",
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// set command
+// ---------------------------------------------------------------------------
+
+// Helper: build a deploy input that also carries the release branch commits
+// needed by getLatestReleaseStepInput() inside createGitHubRelease.
+function setInput(
+  extra: Record<string, unknown>,
+  releaseBranchCommits: { sha: string }[],
+  releaseBranch = "release/v1",
+): DeployStepInput {
+  return {
+    testMode: true,
+    gitCommitsAllLocalBranches: {
+      [releaseBranch]: releaseBranchCommits,
+    },
+    ...extra,
   } as unknown as DeployStepInput;
+}
 
-  const { code, stdout } = await runScript(input, ["set"], []);
+Deno.test(
+  "set command without --release-branch should exit with error",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set",
+      setInput({ nextVersionName: "v1.0.0" }, []),
+    );
 
-  assertEquals(code, 0);
-  assertStringIncludes(stdout, "Running in test mode, skipping creating GitHub release.");
-  assertStringIncludes(stdout, "gh release create v1.0.0 --generate-notes --latest --target foo");
-});
+    assertEquals(code, 1);
+    assertStringIncludes(stdoutText(stdout), "--release-branch is required");
+  },
+);
 
-Deno.test("set command with custom arguments should override defaults", async () => {
-  const input = {
-    nextVersionName: "v2.0.0"
-  } as unknown as DeployStepInput;
+Deno.test(
+  "set command with default arguments should target latest commit on release branch",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set --release-branch release/v1",
+      setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]),
+    );
 
-  const { code, stdout } = await runScript(input, ["set", "--draft", "--notes", "Custom release notes"], []);
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+    assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
+  },
+);
 
-  assertEquals(code, 0);
-  assertStringIncludes(stdout, "Running in test mode, skipping creating GitHub release.");
-  assertStringIncludes(stdout, "gh release create v2.0.0 --draft --notes Custom release notes");
-});
+Deno.test(
+  "set command with custom gh args should append --target unless already provided",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set --release-branch release/v1 --draft",
+      setInput({ nextVersionName: "v2.0.0" }, [{ sha: "def5678" }]),
+    );
 
-Deno.test("set command with GitHub release assets should include them in command", async () => {
-  // Create temporary test files for assets
-  const tempDir = await Deno.makeTempDir();
-  const linuxBinary = `${tempDir}/binary-linux`;
-  const macBinary = `${tempDir}/binary-mac`;
-  
-  await Deno.writeTextFile(linuxBinary, "linux binary content");
-  await Deno.writeTextFile(macBinary, "mac binary content");
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+    assertStringIncludes(stdoutText(stdout), "gh release create v2.0.0 --draft --target def5678");
+  },
+);
 
-  // First, set up assets using set-assets
-  await runScript({} as unknown as DeployStepInput, ["set-assets", `${linuxBinary}#Linux Binary`, `${macBinary}#Mac Binary`], []);
+Deno.test(
+  "set command with explicit --target should not be overridden",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set --release-branch release/v1 --target my-custom-sha",
+      setInput({ nextVersionName: "v3.0.0" }, [{ sha: "should-not-appear" }]),
+    );
 
-  // Then try to create a release - it should pick up the assets from the temp file
-  const input = {
-    nextVersionName: "v1.2.0",
-    gitCurrentBranch: "develop"
-  } as unknown as DeployStepInput;
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "gh release create v3.0.0 --target my-custom-sha");
+    assertEquals(stdoutText(stdout).includes("should-not-appear"), false);
+  },
+);
 
-  const { code, stdout } = await runScript(input, ["set"], []);
+Deno.test(
+  "set command with -r short alias for --release-branch",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set -r release/v1",
+      setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]),
+    );
 
-  assertEquals(code, 0);
-  assertStringIncludes(stdout, "Running in test mode, skipping creating GitHub release.");
-  assertStringIncludes(stdout, `gh release create v1.2.0 --generate-notes --latest --target develop ${linuxBinary}#Linux Binary ${macBinary}#Mac Binary`);
-}); 
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
+  },
+);
 
-Deno.test("set-latest-release alias should work the same as set", async () => {
-  const input = {
-    nextVersionName: "v1.0.0",
-    gitCurrentBranch: "main"
-  } as unknown as DeployStepInput;
+Deno.test(
+  "set command with GitHub release assets should include them in command",
+  async () => {
+    const tempDir = await Deno.makeTempDir();
+    const linuxBinary = `${tempDir}/binary-linux`;
+    const macBinary = `${tempDir}/binary-mac`;
 
-  // Test with 'set'
-  const { stdout: setOutput } = await runScript(input, ["set"], []);
+    await Deno.writeTextFile(linuxBinary, "linux binary content");
+    await Deno.writeTextFile(macBinary, "mac binary content");
 
-  // Test with 'set-latest-release'
-  const { stdout: aliasOutput } = await runScript(input, ["set-latest-release"], []);
+    // First, set up assets using set-assets
+    await runDeployScript(
+      `deno run --allow-all script.ts set-assets '${linuxBinary}#Linux Binary' '${macBinary}#Mac Binary'`,
+      {} as unknown as DeployStepInput,
+    );
 
-  // Both should produce the same output
-  assertEquals(setOutput, aliasOutput);
-});
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set --release-branch release/v1",
+      setInput({ nextVersionName: "v1.2.0" }, [{ sha: "cafe9876" }]),
+    );
 
-Deno.test("no command specified should default to get behavior", async () => {
-  const input: GetLatestReleaseStepInput = {
-    gitCurrentBranch: "main",
-    gitRepoOwner: "levibostian", 
-    gitRepoName: "decaf-script-github-releases",
-        gitCommitsCurrentBranch: [
-      {
-        sha: "abc2",
-        title: "Release v1.0.0",
-        tags: ["v1.0.0"],
-        message: "Release v1.0.0",
-      }
-    ] as unknown as GitCommit[],
-    gitCommitsAllLocalBranches: {}
-  } as unknown as GetLatestReleaseStepInput;
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+    assertStringIncludes(stdoutText(stdout), "gh release create v1.2.0 --generate-notes --latest --target cafe9876");
+    assertStringIncludes(stdoutText(stdout), `${linuxBinary}#Linux Binary`);
+    assertStringIncludes(stdoutText(stdout), `${macBinary}#Mac Binary`);
+  },
+);
 
-  // Test with no arguments (should default to 'get')
-  const { code, stdout } = await runScript(input, [], [
-    { name: "Release v1.0.0", tagName: "v1.0.0" }
-  ]);
+Deno.test(
+  "set-latest-release alias should work the same as set",
+  async () => {
+    const input = setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]);
 
-  assertEquals(code, 0);
-  assertStringIncludes(stdout, "Latest git tag on the current branch is: v1.0.0");
-  assertStringIncludes(stdout, "latest release found: Release v1.0.0 (v1.0.0)");
-});
+    const { stdout: setOutput } = await runDeployScript(
+      "deno run --allow-all script.ts set --release-branch release/v1",
+      input,
+    );
+    const { stdout: aliasOutput } = await runDeployScript(
+      "deno run --allow-all script.ts set-latest-release --release-branch release/v1",
+      input,
+    );
 
-Deno.test("set-assets command should save assets to temp file", async () => {
-  // Create temporary test files for assets
-  const tempDir = await Deno.makeTempDir();
-  const linuxBinary = `${tempDir}/binary-linux`;
-  const macBinary = `${tempDir}/binary-mac`;
-  
-  await Deno.writeTextFile(linuxBinary, "linux binary content");
-  await Deno.writeTextFile(macBinary, "mac binary content");
+    assertEquals(setOutput, aliasOutput);
+  },
+);
 
-  // We need a basic input even though this command doesn't use it much
-  const input = {} as unknown as DeployStepInput;
+Deno.test(
+  "set command in test mode should NOT call gh",
+  async () => {
+    const cleanup = await mockBin("gh", "bash", 'echo "gh-was-called"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        setInput({ nextVersionName: "v1.0.0", testMode: true }, [{ sha: "abc1234" }]),
+      );
 
-  const { code, stdout } = await runScript(input, ["set-assets", `${linuxBinary}#Linux Binary`, `${macBinary}#Mac Binary`], []);
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+      assertEquals(stdoutText(stdout).includes("gh-was-called"), false);
+    } finally {
+      cleanup();
+    }
+  },
+);
 
-  assertEquals(code, 0);
-  assertStringIncludes(stdout, "GitHub Release assets:");
-  assertStringIncludes(stdout, `${linuxBinary}#Linux Binary`);
-  assertStringIncludes(stdout, `${macBinary}#Mac Binary`);
-});
+Deno.test(
+  "set command NOT in test mode DOES call gh",
+  async () => {
+    const cleanup = await mockBin("gh", "bash", 'echo "gh-was-called: $*"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        setInput({ nextVersionName: "v1.0.0", testMode: false }, [{ sha: "abc1234" }]),
+      );
 
-Deno.test("set-github-release-assets alias should work the same as set-assets", async () => {
-  // Create temporary test file for asset
-  const tempDir = await Deno.makeTempDir();
-  const testFile = `${tempDir}/test`;
-  
-  await Deno.writeTextFile(testFile, "test content");
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "gh-was-called:");
+      assertStringIncludes(stdoutText(stdout), "release create");
+      assertStringIncludes(stdoutText(stdout), "v1.0.0");
+    } finally {
+      cleanup();
+    }
+  },
+);
 
-  const input = {} as unknown as DeployStepInput;
+// ---------------------------------------------------------------------------
+// set-assets command
+// ---------------------------------------------------------------------------
 
-  const { code: code1, stdout: stdout1 } = await runScript(input, ["set-assets", `${testFile}#Test File`], []);
-  const { code: code2, stdout: stdout2 } = await runScript(input, ["set-github-release-assets", `${testFile}#Test File`], []);
+Deno.test(
+  "set-assets command should save assets to temp file",
+  async () => {
+    const tempDir = await Deno.makeTempDir();
+    const linuxBinary = `${tempDir}/binary-linux`;
+    const macBinary = `${tempDir}/binary-mac`;
 
-  assertEquals(code1, 0);
-  assertEquals(code2, 0);
-  // Both should mention saving assets
-  assertStringIncludes(stdout1, "GitHub Release assets:");
-  assertStringIncludes(stdout2, "GitHub Release assets:");
-});
+    await Deno.writeTextFile(linuxBinary, "linux binary content");
+    await Deno.writeTextFile(macBinary, "mac binary content");
 
-Deno.test("set-assets command should require at least one asset", async () => {
-  const input = {} as unknown as DeployStepInput;
+    const { code, stdout } = await runDeployScript(
+      `deno run --allow-all script.ts set-assets '${linuxBinary}#Linux Binary' '${macBinary}#Mac Binary'`,
+      {} as unknown as DeployStepInput,
+    );
 
-  const { code, stdout } = await runScript(input, ["set-assets"], []);
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "GitHub Release assets:");
+    assertStringIncludes(stdoutText(stdout), `${linuxBinary}#Linux Binary`);
+    assertStringIncludes(stdoutText(stdout), `${macBinary}#Mac Binary`);
+  },
+);
 
-  assertEquals(code, 1);
-  assertStringIncludes(stdout, "Error: set-assets command requires at least one asset argument");
-});
+Deno.test(
+  "set-github-release-assets alias should work the same as set-assets",
+  async () => {
+    const tempDir = await Deno.makeTempDir();
+    const testFile = `${tempDir}/test`;
 
-Deno.test("set-assets should verify asset files exist before saving", async () => {
-  // Create temporary test files
-  const tempDir = await Deno.makeTempDir();
-  const validFile1 = `${tempDir}/valid-file-1.txt`;
-  const validFile2 = `${tempDir}/valid-file-2.bin`;
-  const nonExistentFile = `${tempDir}/non-existent.txt`;
-  
-  await Deno.writeTextFile(validFile1, "test content 1");
-  await Deno.writeTextFile(validFile2, "test content 2");
-  
-  const input = {} as unknown as DeployStepInput;
+    await Deno.writeTextFile(testFile, "test content");
 
-  // Test with valid files (with and without hash labels)
-  const { code: validCode, stdout: validStdout } = await runScript(input, [
-    "set-assets", 
-    validFile1,  // No hash label
-    `${validFile2}#Binary File`  // With hash label
-  ], []);
+    const { code: code1, stdout: stdout1 } = await runDeployScript(
+      `deno run --allow-all script.ts set-assets '${testFile}#Test File'`,
+      {} as unknown as DeployStepInput,
+    );
+    const { code: code2, stdout: stdout2 } = await runDeployScript(
+      `deno run --allow-all script.ts set-github-release-assets '${testFile}#Test File'`,
+      {} as unknown as DeployStepInput,
+    );
 
-  assertEquals(validCode, 0);
-  assertStringIncludes(validStdout, "GitHub Release assets:");
-  assertStringIncludes(validStdout, validFile1);
-  assertStringIncludes(validStdout, `${validFile2}#Binary File`);
+    assertEquals(code1, 0);
+    assertEquals(code2, 0);
+    assertStringIncludes(stdoutText(stdout1), "GitHub Release assets:");
+    assertStringIncludes(stdoutText(stdout2), "GitHub Release assets:");
+  },
+);
 
-  // Test with non-existent file
-  const { code: invalidCode, stdout: invalidStdout } = await runScript(input, [
-    "set-assets", 
-    nonExistentFile
-  ], []);
+Deno.test(
+  "set-assets command should require at least one asset",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set-assets",
+      {} as unknown as DeployStepInput,
+    );
 
-  assertEquals(invalidCode, 1);
-  assertStringIncludes(invalidStdout, `Given asset, ${nonExistentFile}, file does not exist. Cannot proceed.`);
+    assertEquals(code, 1);
+    assertStringIncludes(stdoutText(stdout), "Error: set-assets command requires at least one asset argument");
+  },
+);
 
-  // Test with directory instead of file
-  const { code: dirCode, stdout: dirStdout } = await runScript(input, [
-    "set-assets", 
-    tempDir  // This is a directory, not a file
-  ], []);
+Deno.test(
+  "set-assets should verify asset files exist before saving",
+  async () => {
+    const tempDir = await Deno.makeTempDir();
+    const validFile1 = `${tempDir}/valid-file-1.txt`;
+    const validFile2 = `${tempDir}/valid-file-2.bin`;
+    const nonExistentFile = `${tempDir}/non-existent.txt`;
 
-  assertEquals(dirCode, 1);
-  assertStringIncludes(dirStdout, `Given asset, ${tempDir}, is not a file. Cannot proceed.`);
-});
+    await Deno.writeTextFile(validFile1, "test content 1");
+    await Deno.writeTextFile(validFile2, "test content 2");
 
-Deno.test("set-assets should handle mixed asset formats (with and without hash)", async () => {
-  // Create temporary test files
-  const tempDir = await Deno.makeTempDir();
-  const binaryFile = `${tempDir}/app.exe`;
-  const docFile = `${tempDir}/readme.txt`;
-  const configFile = `${tempDir}/config.json`;
-  
-  await Deno.writeTextFile(binaryFile, "binary content");
-  await Deno.writeTextFile(docFile, "documentation");
-  await Deno.writeTextFile(configFile, '{"version": "1.0"}');
-  
-  const input = {} as unknown as DeployStepInput;
+    const { code: validCode, stdout: validStdout } = await runDeployScript(
+      `deno run --allow-all script.ts set-assets '${validFile1}' '${validFile2}#Binary File'`,
+      {} as unknown as DeployStepInput,
+    );
 
-  // Test with mix of assets with and without hash labels
-  const { code, stdout } = await runScript(input, [
-    "set-assets",
-    binaryFile,  // No hash
-    `${docFile}#Documentation`,  // With hash
-    configFile,  // No hash
-    `${configFile}#Configuration File`  // Same file with different hash
-  ], []);
+    assertEquals(validCode, 0);
+    assertStringIncludes(stdoutText(validStdout), "GitHub Release assets:");
+    assertStringIncludes(stdoutText(validStdout), validFile1);
+    assertStringIncludes(stdoutText(validStdout), `${validFile2}#Binary File`);
 
-  assertEquals(code, 0);
-  assertStringIncludes(stdout, "GitHub Release assets:");
-  assertStringIncludes(stdout, binaryFile);
-  assertStringIncludes(stdout, `${docFile}#Documentation`);
-  assertStringIncludes(stdout, configFile);
-  assertStringIncludes(stdout, `${configFile}#Configuration File`);
-});
+    const { code: invalidCode, stdout: invalidStdout } = await runDeployScript(
+      `deno run --allow-all script.ts set-assets '${nonExistentFile}'`,
+      {} as unknown as DeployStepInput,
+    );
+
+    assertEquals(invalidCode, 1);
+    assertStringIncludes(
+      stdoutText(invalidStdout),
+      `Given asset, ${nonExistentFile}, file does not exist. Cannot proceed.`,
+    );
+
+    const { code: dirCode, stdout: dirStdout } = await runDeployScript(
+      `deno run --allow-all script.ts set-assets '${tempDir}'`,
+      {} as unknown as DeployStepInput,
+    );
+
+    assertEquals(dirCode, 1);
+    assertStringIncludes(
+      stdoutText(dirStdout),
+      `Given asset, ${tempDir}, is not a file. Cannot proceed.`,
+    );
+  },
+);
+
+Deno.test(
+  "set-assets should handle mixed asset formats (with and without hash)",
+  async () => {
+    const tempDir = await Deno.makeTempDir();
+    const binaryFile = `${tempDir}/app.exe`;
+    const docFile = `${tempDir}/readme.txt`;
+    const configFile = `${tempDir}/config.json`;
+
+    await Deno.writeTextFile(binaryFile, "binary content");
+    await Deno.writeTextFile(docFile, "documentation");
+    await Deno.writeTextFile(configFile, '{"version": "1.0"}');
+
+    const { code, stdout } = await runDeployScript(
+      `deno run --allow-all script.ts set-assets '${binaryFile}' '${docFile}#Documentation' '${configFile}' '${configFile}#Configuration File'`,
+      {} as unknown as DeployStepInput,
+    );
+
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "GitHub Release assets:");
+    assertStringIncludes(stdoutText(stdout), binaryFile);
+    assertStringIncludes(stdoutText(stdout), `${docFile}#Documentation`);
+    assertStringIncludes(stdoutText(stdout), configFile);
+    assertStringIncludes(stdoutText(stdout), `${configFile}#Configuration File`);
+  },
+);
