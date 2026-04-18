@@ -14,6 +14,7 @@
     "jsr:@david/path@0.2": "0.2.0",
     "jsr:@david/which@~0.4.1": "0.4.1",
     "jsr:@levibostian/decaf-sdk@0.7.0": "0.7.0",
+    "jsr:@levibostian/mock-a-bin@1.1.0": "1.1.0",
     "jsr:@std/assert@1.0.14": "1.0.14",
     "jsr:@std/bytes@^1.0.5": "1.0.6",
     "jsr:@std/cli@^1.0.28": "1.0.28",
@@ -101,6 +102,9 @@
         "jsr:@cross/utils"
       ]
     },
+    "@levibostian/mock-a-bin@1.1.0": {
+      "integrity": "6f0207183f68585378c629e7774cfe0e2a3451be1fce31debab7be14a42fe961"
+    },
     "@std/assert@1.0.14": {
       "integrity": "68d0d4a43b365abc927f45a9b85c639ea18a9fab96ad92281e493e4ed84abaa4",
       "dependencies": [
@@ -167,6 +171,7 @@
     "dependencies": [
       "jsr:@david/dax@0.43.2",
       "jsr:@levibostian/decaf-sdk@0.7.0",
+      "jsr:@levibostian/mock-a-bin@1.1.0",
       "jsr:@std/assert@1.0.14",
       "jsr:@std/cli@^1.0.28",
       "jsr:@std/semver@1"

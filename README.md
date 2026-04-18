@@ -24,8 +24,8 @@ Here are some simple examples for how to run this script with decaf on GitHub Ac
 ```yaml
 - uses: levibostian/decaf
   with:
-    get_latest_release_current_branch: npx @levibostian/decaf-script-github-releases get --release-branch release/v1
-    deploy: your-script-here && npx @levibostian/decaf-script-github-releases set
+    get_latest_release_current_branch: npx @levibostian/decaf-script-github-releases-release-branch get --release-branch main
+    deploy: your-script-here && npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main
     # Other decaf arguments...
 ```
 
@@ -33,8 +33,8 @@ Here are some simple examples for how to run this script with decaf on GitHub Ac
 
 ```bash
 decaf \
-  --get-latest-release-current-branch "npx @levibostian/decaf-script-github-releases get --release-branch release/v1" \
-  --deploy "your-script-here && npx @levibostian/decaf-script-github-releases set"
+  --get-latest-release-current-branch "npx @levibostian/decaf-script-github-releases-release-branch get --release-branch main" \
+  --deploy "your-script-here && npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main"
 ```
 
 > Note: Replace `your-script-here` with whatever commands you need to run as part of the deployment process before creating the release. Be sure to run the script *last* because once you create the release, decaf will consider the deployment successful and if you re-run decaf, it will not attempt to re-attempt the deployment.
@@ -46,8 +46,8 @@ The above examples use `npx` and are arguably the easiest way to run the script.
 1. **Run with Deno** (requires Deno installed)
 
 ```yaml
-get_latest_release_current_branch: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases get --release-branch release/v1
-deploy: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases set
+get_latest_release_current_branch: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases-release-branch get --release-branch main
+deploy: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releases-release-branch set --release-branch main
 ```
 
 2. **Run as a compiled binary**
@@ -55,11 +55,11 @@ deploy: deno run --allow-all --quiet jsr:@levibostian/decaf-script-github-releas
 Great option that doesn't depend on node or deno. This just installs a binary from GitHub and runs it for your operating system.
 
 ```yaml
-get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases get --release-branch release/v1
-deploy: curl -fsSL https://github.com/levibostian/decaf-script-github-releases/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases set
+get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases-release-branch/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases-release-branch get --release-branch main
+deploy: curl -fsSL https://github.com/levibostian/decaf-script-github-releases-release-branch/blob/HEAD/install?raw=true | bash -s "0.1.0" && ./decaf-script-github-releases-release-branch set --release-branch main
 
 # Or, always run the latest version (less stable, but always up-to-date)
-get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases/blob/HEAD/install?raw=true | bash && ./decaf-script-github-releases get --release-branch release/v1
+get_latest_release_current_branch: curl -fsSL https://github.com/levibostian/decaf-script-github-releases-release-branch/blob/HEAD/install?raw=true | bash && ./decaf-script-github-releases-release-branch get --release-branch main
 ```
 
 # Commands
@@ -104,10 +104,10 @@ This approach ensures that when you are running on a separate branch (e.g. `main
 Example usage:
 
 ```bash 
-npx @levibostian/decaf-script-github-releases get --release-branch release/v1
+npx @levibostian/decaf-script-github-releases-release-branch get --release-branch release/v1
 
 # Short alias for --release-branch
-npx @levibostian/decaf-script-github-releases get -r release/v1
+npx @levibostian/decaf-script-github-releases-release-branch get -r release/v1
 ```
 
 ### Set/Create Release
@@ -122,10 +122,10 @@ Example usage:
 
 ```bash
 # Use the default settings to create the release
-npx @levibostian/decaf-script-github-releases set
+npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main
 
 # Or, with custom GitHub CLI arguments
-npx @levibostian/decaf-script-github-releases set --draft --target {{gitCurrentBranch}}
+npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main --draft
 ```
 
 ### Set GitHub Release Assets
@@ -141,8 +141,8 @@ Example usage:
 ```bash
 # After your deployment script runs, set the assets to upload. 
 # Each asset follows the format: `"path/to/file#Display Name"`
-npx @levibostian/decaf-script-github-releases set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
+npx @levibostian/decaf-script-github-releases-release-branch set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
 
 # Then create the release (it will automatically include the assets)
-npx @levibostian/decaf-script-github-releases set
+npx @levibostian/decaf-script-github-releases-release-branch set --release-branch main
 ```
