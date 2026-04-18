@@ -7,6 +7,7 @@ import {
   runGetLatestReleaseScript,
   runDeployScript,
 } from "@levibostian/decaf-sdk/testing";
+import { mockBin } from "@levibostian/mock-a-bin";
 import { assertEquals, assertStringIncludes } from "@std/assert";
 
 // Helper: join stdout lines into a single string for partial-match assertions.
@@ -24,7 +25,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [] as unknown as GitCommit[],
       gitCommitsAllLocalBranches: {},
     } as unknown as GetLatestReleaseStepInput;
@@ -49,7 +50,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [],
       gitCommitsAllLocalBranches: {},
     } as unknown as GetLatestReleaseStepInput;
@@ -70,7 +71,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "abc1", title: "Initial commit", tags: [], message: "Initial commit" },
       ] as unknown as GitCommit[],
@@ -98,7 +99,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "abc1", title: "main commit", tags: [], message: "main" },
       ] as unknown as GitCommit[],
@@ -136,7 +137,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "abc1", title: "main commit", tags: [], message: "main" },
       ] as unknown as GitCommit[],
@@ -170,7 +171,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "abc2", title: "main ahead commit", tags: [], message: "ahead" },
         { sha: "shared1", title: "shared base commit", tags: [], message: "shared" },
@@ -209,7 +210,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "mainOnly", title: "main-only commit", tags: [], message: "main only" },
         { sha: "common1", title: "common ancestor", tags: [], message: "common" },
@@ -253,7 +254,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "mainOnly1", title: "main commit 1", tags: [], message: "main 1" },
         { sha: "mainOnly2", title: "main commit 2", tags: [], message: "main 2" },
@@ -293,7 +294,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "shared1", title: "shared commit", tags: [], message: "shared" },
       ] as unknown as GitCommit[],
@@ -335,7 +336,7 @@ Deno.test(
     const input: GetLatestReleaseStepInput = {
       gitCurrentBranch: "main",
       gitRepoOwner: "levibostian",
-      gitRepoName: "decaf-script-github-releases",
+      gitRepoName: "decaf-script-github-releases-release-branch",
       gitCommitsCurrentBranch: [
         { sha: "shared1", title: "shared commit", tags: [], message: "shared" },
       ] as unknown as GitCommit[],
@@ -370,42 +371,87 @@ Deno.test(
 // set command
 // ---------------------------------------------------------------------------
 
-Deno.test(
-  "set command with default arguments should generate correct gh command",
-  async () => {
-    const input = {
-      nextVersionName: "v1.0.0",
-      gitCurrentBranch: "foo",
-      testMode: true,
-    } as unknown as DeployStepInput;
+// Helper: build a deploy input that also carries the release branch commits
+// needed by getLatestReleaseStepInput() inside createGitHubRelease.
+function setInput(
+  extra: Record<string, unknown>,
+  releaseBranchCommits: { sha: string }[],
+  releaseBranch = "release/v1",
+): DeployStepInput {
+  return {
+    testMode: true,
+    gitCommitsAllLocalBranches: {
+      [releaseBranch]: releaseBranchCommits,
+    },
+    ...extra,
+  } as unknown as DeployStepInput;
+}
 
+Deno.test(
+  "set command without --release-branch should exit with error",
+  async () => {
     const { code, stdout } = await runDeployScript(
       "deno run --allow-all script.ts set",
-      input,
+      setInput({ nextVersionName: "v1.0.0" }, []),
     );
 
-    assertEquals(code, 0);
-    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
-    assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target foo");
+    assertEquals(code, 1);
+    assertStringIncludes(stdoutText(stdout), "--release-branch is required");
   },
 );
 
 Deno.test(
-  "set command with custom arguments should override defaults",
+  "set command with default arguments should target latest commit on release branch",
   async () => {
-    const input = {
-      nextVersionName: "v2.0.0",
-      testMode: true,
-    } as unknown as DeployStepInput;
-
     const { code, stdout } = await runDeployScript(
-      "deno run --allow-all script.ts set --draft --notes 'Custom release notes'",
-      input,
+      "deno run --allow-all script.ts set --release-branch release/v1",
+      setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]),
     );
 
     assertEquals(code, 0);
     assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
-    assertStringIncludes(stdoutText(stdout), "gh release create v2.0.0 --draft --notes");
+    assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
+  },
+);
+
+Deno.test(
+  "set command with custom gh args should append --target unless already provided",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set --release-branch release/v1 --draft",
+      setInput({ nextVersionName: "v2.0.0" }, [{ sha: "def5678" }]),
+    );
+
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+    assertStringIncludes(stdoutText(stdout), "gh release create v2.0.0 --draft --target def5678");
+  },
+);
+
+Deno.test(
+  "set command with explicit --target should not be overridden",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set --release-branch release/v1 --target my-custom-sha",
+      setInput({ nextVersionName: "v3.0.0" }, [{ sha: "should-not-appear" }]),
+    );
+
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "gh release create v3.0.0 --target my-custom-sha");
+    assertEquals(stdoutText(stdout).includes("should-not-appear"), false);
+  },
+);
+
+Deno.test(
+  "set command with -r short alias for --release-branch",
+  async () => {
+    const { code, stdout } = await runDeployScript(
+      "deno run --allow-all script.ts set -r release/v1",
+      setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]),
+    );
+
+    assertEquals(code, 0);
+    assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
   },
 );
 
@@ -425,20 +471,14 @@ Deno.test(
       {} as unknown as DeployStepInput,
     );
 
-    const input = {
-      nextVersionName: "v1.2.0",
-      gitCurrentBranch: "develop",
-      testMode: true,
-    } as unknown as DeployStepInput;
-
     const { code, stdout } = await runDeployScript(
-      "deno run --allow-all script.ts set",
-      input,
+      "deno run --allow-all script.ts set --release-branch release/v1",
+      setInput({ nextVersionName: "v1.2.0" }, [{ sha: "cafe9876" }]),
     );
 
     assertEquals(code, 0);
     assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
-    assertStringIncludes(stdoutText(stdout), "gh release create v1.2.0 --generate-notes --latest --target develop");
+    assertStringIncludes(stdoutText(stdout), "gh release create v1.2.0 --generate-notes --latest --target cafe9876");
     assertStringIncludes(stdoutText(stdout), `${linuxBinary}#Linux Binary`);
     assertStringIncludes(stdoutText(stdout), `${macBinary}#Mac Binary`);
   },
@@ -447,22 +487,57 @@ Deno.test(
 Deno.test(
   "set-latest-release alias should work the same as set",
   async () => {
-    const input = {
-      nextVersionName: "v1.0.0",
-      gitCurrentBranch: "main",
-      testMode: true,
-    } as unknown as DeployStepInput;
+    const input = setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]);
 
     const { stdout: setOutput } = await runDeployScript(
-      "deno run --allow-all script.ts set",
+      "deno run --allow-all script.ts set --release-branch release/v1",
       input,
     );
     const { stdout: aliasOutput } = await runDeployScript(
-      "deno run --allow-all script.ts set-latest-release",
+      "deno run --allow-all script.ts set-latest-release --release-branch release/v1",
       input,
     );
 
     assertEquals(setOutput, aliasOutput);
+  },
+);
+
+Deno.test(
+  "set command in test mode should NOT call gh",
+  async () => {
+    const cleanup = await mockBin("gh", "bash", 'echo "gh-was-called"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        setInput({ nextVersionName: "v1.0.0", testMode: true }, [{ sha: "abc1234" }]),
+      );
+
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+      assertEquals(stdoutText(stdout).includes("gh-was-called"), false);
+    } finally {
+      cleanup();
+    }
+  },
+);
+
+Deno.test(
+  "set command NOT in test mode DOES call gh",
+  async () => {
+    const cleanup = await mockBin("gh", "bash", 'echo "gh-was-called: $*"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        setInput({ nextVersionName: "v1.0.0", testMode: false }, [{ sha: "abc1234" }]),
+      );
+
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "gh-was-called:");
+      assertStringIncludes(stdoutText(stdout), "release create");
+      assertStringIncludes(stdoutText(stdout), "v1.0.0");
+    } finally {
+      cleanup();
+    }
   },
 );
 

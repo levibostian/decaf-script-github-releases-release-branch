@@ -12,7 +12,7 @@ interface ScriptDataSavedToFile {
 }
 const getFileToSaveScriptDataTo = (): string => {
   const tempDir = Deno.env.get("TMPDIR") || Deno.env.get("TMP") || "/tmp";
-    const assetsFilePath = `${tempDir}/decaf-script-github-releases-assets.json`;
+    const assetsFilePath = `${tempDir}/decaf-script-github-releases-release-branch-assets.json`;
   return assetsFilePath;
 }
 
@@ -97,9 +97,40 @@ export const getLatestReleaseFromGitHubReleases = async (
   return null;
 };
 
-export const createGitHubRelease = async (customArgs: string[] = []): Promise<void> => {
+export const createGitHubRelease = async (args: string[] = []): Promise<void> => {
   const input = getDeployStepInput();
-  
+  const releaseInput = getLatestReleaseStepInput();
+
+  // --release-branch is required; all other args are forwarded to `gh release create`
+  const parsed = parseArgs(args, {
+    string: ["release-branch"],
+    alias: { "release-branch": "r" },
+  });
+
+  const releaseBranch = parsed["release-branch"];
+  if (!releaseBranch) {
+    console.error("Error: --release-branch is required for the set command");
+    console.error("Usage: script.ts set --release-branch <branch> [gh args...]");
+    Deno.exit(1);
+  }
+
+  // Get the latest commit on the release branch from the input data
+  const releaseBranchCommits = releaseInput.gitCommitsAllLocalBranches[releaseBranch];
+  if (!releaseBranchCommits || releaseBranchCommits.length === 0) {
+    console.error(`Could not find commits for release branch: ${releaseBranch}. Cannot determine target commit.`);
+    Deno.exit(1);
+  }
+  const latestReleaseBranchCommit = releaseBranchCommits[0].sha;
+
+  // Build gh passthrough args from parsed, simply by dropping the release-branch key
+  const { "release-branch": _rb, r: _r, _: positionals, ...ghFlags } = parsed;
+  const ghArgs = [
+    ...Object.entries(ghFlags).flatMap(([key, val]) =>
+      val === true ? [`--${key}`] : [`--${key}`, String(val)]
+    ),
+    ...positionals.map(String),
+  ];
+
   // Get assets from temp file created by set-assets command
   let githubReleaseAssets: string[] = [];
   try {
@@ -109,34 +140,26 @@ export const createGitHubRelease = async (customArgs: string[] = []): Promise<vo
   } catch {
     // No temp file or error reading it, continue with empty assets
   }
-  
-  // Get current branch from input
-  const currentBranch = input.gitCurrentBranch;
-  
-  let argsToCreateGithubRelease: string[];
-  
-  if (customArgs.length > 0) {
-    // User provided custom arguments, use them directly
-    argsToCreateGithubRelease = [
-      'release',
-      'create',
-      input.nextVersionName,
-      ...customArgs,
-      ...githubReleaseAssets,
-    ];
-  } else {
-    // Use default arguments
-    argsToCreateGithubRelease = [
-      'release',
-      'create', 
-      input.nextVersionName,
-      '--generate-notes',
-      '--latest',
-      '--target',
-      currentBranch,
-      ...githubReleaseAssets,
-    ];
+
+  // Use caller-supplied args, or fall back to sensible defaults
+  const baseArgs = ghArgs.length > 0 ? ghArgs : ["--generate-notes", "--latest"];
+
+  // Append --target <latest-release-branch-commit> unless the caller already supplied it
+  const hasTarget = parsed["target"] !== undefined;
+
+  const targetArgs = hasTarget ? [] : ["--target", latestReleaseBranchCommit];
+  if (!hasTarget) {
+    console.log(`Targeting latest commit on branch ${releaseBranch}: ${latestReleaseBranchCommit}`);
   }
+
+  const argsToCreateGithubRelease = [
+    "release",
+    "create",
+    input.nextVersionName,
+    ...baseArgs,
+    ...targetArgs,
+    ...githubReleaseAssets,
+  ];
 
   if (input.testMode) {
     console.log("Running in test mode, skipping creating GitHub release.");
@@ -183,19 +206,24 @@ export const setGitHubReleaseAssets = async (assets: string[]): Promise<void> =>
 function showHelp() {
   console.log(`
 Usage: 
-  script.ts get --release-branch <branch>    # Get the latest release
-  script.ts set [args...]                     # Set/create a GitHub release
-  script.ts set-assets <asset1> [asset2...]   # Set GitHub release assets
-  script.ts set-latest-release [args...]      # Alias for 'set'
-  script.ts set-github-release-assets <asset1> [asset2...]  # Alias for 'set-assets'
+  script.ts get --release-branch <branch>              # Get the latest release
+  script.ts set --release-branch <branch> [args...]    # Set/create a GitHub release
+  script.ts set-assets <asset1> [asset2...]            # Set GitHub release assets
+  script.ts get-latest-release --release-branch <branch>            # Alias for 'get'
+  script.ts set-latest-release --release-branch <branch> [args...]  # Alias for 'set'
+  script.ts set-github-release-assets <asset1> [asset2...]          # Alias for 'set-assets'
 
 Commands:
   get, get-latest-release                Get the latest common GitHub release between the release branch and the current branch
-  set, set-latest-release                Create a new GitHub release
+  set, set-latest-release                Create a new GitHub release targeting the latest remote commit on the release branch
   set-assets, set-github-release-assets  Set GitHub release assets for future release creation
 
-Required flags for get:
-  --release-branch, -r <branch>  The release branch to compare against the current branch
+Required flags for get and set:
+  --release-branch, -r <branch>  The release branch to use
+
+Notes for set:
+  --target is automatically set to the latest remote commit on the release branch.
+  You may override it by passing --target explicitly.
 
 Examples:
   # Get latest release
@@ -203,12 +231,13 @@ Examples:
   script.ts get-latest-release --release-branch release/v1
 
   # Create release with default settings
-  script.ts set
-  script.ts set-latest-release
+  script.ts set --release-branch release/v1
+  script.ts set-latest-release --release-branch release/v1
 
-  # Create release with custom arguments
-  script.ts set --generate-notes --latest --target main
-  script.ts set-latest-release --draft --notes "Custom release notes"
+  # Create release with custom arguments (--target auto-appended unless provided)
+  script.ts set --release-branch release/v1 --generate-notes --latest
+  script.ts set --release-branch release/v1 --draft --notes "Custom release notes"
+  script.ts set --release-branch release/v1 --target my-sha  # explicit --target, not overridden
 
   # Set assets for future release
   script.ts set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
