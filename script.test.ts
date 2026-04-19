@@ -401,57 +401,98 @@ Deno.test(
 );
 
 Deno.test(
+  "set command should use git rev-parse result, not stale input commit array",
+  async () => {
+    const gitSha = "git-sha-from-rev-parse";
+    const inputSha = "stale-sha-from-input";
+    const cleanup = await mockBin("git", "bash", `echo "${gitSha}"; exit 0`);
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        setInput({ nextVersionName: "v1.0.0" }, [{ sha: inputSha }]),
+      );
+
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), `--target ${gitSha}`);
+      assertEquals(stdoutText(stdout).includes(inputSha), false);
+    } finally {
+      cleanup();
+    }
+  },
+);
+
+Deno.test(
   "set command with default arguments should target latest commit on release branch",
   async () => {
-    const { code, stdout } = await runDeployScript(
-      "deno run --allow-all script.ts set --release-branch release/v1",
-      setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]),
-    );
+    const cleanup = await mockBin("git", "bash", 'echo "abc1234"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        setInput({ nextVersionName: "v1.0.0" }, []),
+      );
 
-    assertEquals(code, 0);
-    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
-    assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+      assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
+    } finally {
+      cleanup();
+    }
   },
 );
 
 Deno.test(
   "set command with custom gh args should append --target unless already provided",
   async () => {
-    const { code, stdout } = await runDeployScript(
-      "deno run --allow-all script.ts set --release-branch release/v1 --draft",
-      setInput({ nextVersionName: "v2.0.0" }, [{ sha: "def5678" }]),
-    );
+    const cleanup = await mockBin("git", "bash", 'echo "def5678"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1 --draft",
+        setInput({ nextVersionName: "v2.0.0" }, []),
+      );
 
-    assertEquals(code, 0);
-    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
-    assertStringIncludes(stdoutText(stdout), "gh release create v2.0.0 --draft --target def5678");
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+      assertStringIncludes(stdoutText(stdout), "gh release create v2.0.0 --draft --target def5678");
+    } finally {
+      cleanup();
+    }
   },
 );
 
 Deno.test(
   "set command with explicit --target should not be overridden",
   async () => {
-    const { code, stdout } = await runDeployScript(
-      "deno run --allow-all script.ts set --release-branch release/v1 --target my-custom-sha",
-      setInput({ nextVersionName: "v3.0.0" }, [{ sha: "should-not-appear" }]),
-    );
+    const cleanup = await mockBin("git", "bash", 'echo "should-not-appear"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1 --target my-custom-sha",
+        setInput({ nextVersionName: "v3.0.0" }, []),
+      );
 
-    assertEquals(code, 0);
-    assertStringIncludes(stdoutText(stdout), "gh release create v3.0.0 --target my-custom-sha");
-    assertEquals(stdoutText(stdout).includes("should-not-appear"), false);
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "gh release create v3.0.0 --target my-custom-sha");
+      assertEquals(stdoutText(stdout).includes("should-not-appear"), false);
+    } finally {
+      cleanup();
+    }
   },
 );
 
 Deno.test(
   "set command with -r short alias for --release-branch",
   async () => {
-    const { code, stdout } = await runDeployScript(
-      "deno run --allow-all script.ts set -r release/v1",
-      setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]),
-    );
+    const cleanup = await mockBin("git", "bash", 'echo "abc1234"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set -r release/v1",
+        setInput({ nextVersionName: "v1.0.0" }, []),
+      );
 
-    assertEquals(code, 0);
-    assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "gh release create v1.0.0 --generate-notes --latest --target abc1234");
+    } finally {
+      cleanup();
+    }
   },
 );
 
@@ -471,50 +512,18 @@ Deno.test(
       {} as unknown as DeployStepInput,
     );
 
-    const { code, stdout } = await runDeployScript(
-      "deno run --allow-all script.ts set --release-branch release/v1",
-      setInput({ nextVersionName: "v1.2.0" }, [{ sha: "cafe9876" }]),
-    );
-
-    assertEquals(code, 0);
-    assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
-    assertStringIncludes(stdoutText(stdout), "gh release create v1.2.0 --generate-notes --latest --target cafe9876");
-    assertStringIncludes(stdoutText(stdout), `${linuxBinary}#Linux Binary`);
-    assertStringIncludes(stdoutText(stdout), `${macBinary}#Mac Binary`);
-  },
-);
-
-Deno.test(
-  "set-latest-release alias should work the same as set",
-  async () => {
-    const input = setInput({ nextVersionName: "v1.0.0" }, [{ sha: "abc1234" }]);
-
-    const { stdout: setOutput } = await runDeployScript(
-      "deno run --allow-all script.ts set --release-branch release/v1",
-      input,
-    );
-    const { stdout: aliasOutput } = await runDeployScript(
-      "deno run --allow-all script.ts set-latest-release --release-branch release/v1",
-      input,
-    );
-
-    assertEquals(setOutput, aliasOutput);
-  },
-);
-
-Deno.test(
-  "set command in test mode should NOT call gh",
-  async () => {
-    const cleanup = await mockBin("gh", "bash", 'echo "gh-was-called"; exit 0');
+    const cleanup = await mockBin("git", "bash", 'echo "cafe9876"; exit 0');
     try {
       const { code, stdout } = await runDeployScript(
         "deno run --allow-all script.ts set --release-branch release/v1",
-        setInput({ nextVersionName: "v1.0.0", testMode: true }, [{ sha: "abc1234" }]),
+        setInput({ nextVersionName: "v1.2.0" }, []),
       );
 
       assertEquals(code, 0);
       assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
-      assertEquals(stdoutText(stdout).includes("gh-was-called"), false);
+      assertStringIncludes(stdoutText(stdout), "gh release create v1.2.0 --generate-notes --latest --target cafe9876");
+      assertStringIncludes(stdoutText(stdout), `${linuxBinary}#Linux Binary`);
+      assertStringIncludes(stdoutText(stdout), `${macBinary}#Mac Binary`);
     } finally {
       cleanup();
     }
@@ -522,13 +531,58 @@ Deno.test(
 );
 
 Deno.test(
-  "set command NOT in test mode DOES call gh",
+  "set-latest-release alias should work the same as set",
   async () => {
-    const cleanup = await mockBin("gh", "bash", 'echo "gh-was-called: $*"; exit 0');
+    const input = setInput({ nextVersionName: "v1.0.0" }, []);
+
+    const cleanup = await mockBin("git", "bash", 'echo "abc1234"; exit 0');
+    try {
+      const { stdout: setOutput } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        input,
+      );
+      const { stdout: aliasOutput } = await runDeployScript(
+        "deno run --allow-all script.ts set-latest-release --release-branch release/v1",
+        input,
+      );
+
+      assertEquals(setOutput, aliasOutput);
+    } finally {
+      cleanup();
+    }
+  },
+);
+
+Deno.test(
+  "set command in test mode should NOT call gh",
+  async () => {
+    const ghCleanup = await mockBin("gh", "bash", 'echo "gh-was-called"; exit 0');
+    const gitCleanup = await mockBin("git", "bash", 'echo "abc1234"; exit 0');
     try {
       const { code, stdout } = await runDeployScript(
         "deno run --allow-all script.ts set --release-branch release/v1",
-        setInput({ nextVersionName: "v1.0.0", testMode: false }, [{ sha: "abc1234" }]),
+        setInput({ nextVersionName: "v1.0.0", testMode: true }, []),
+      );
+
+      assertEquals(code, 0);
+      assertStringIncludes(stdoutText(stdout), "Running in test mode, skipping creating GitHub release.");
+      assertEquals(stdoutText(stdout).includes("gh-was-called"), false);
+    } finally {
+      ghCleanup();
+      gitCleanup();
+    }
+  },
+);
+
+Deno.test(
+  "set command NOT in test mode DOES call gh",
+  async () => {
+    const ghCleanup = await mockBin("gh", "bash", 'echo "gh-was-called: $*"; exit 0');
+    const gitCleanup = await mockBin("git", "bash", 'echo "abc1234"; exit 0');
+    try {
+      const { code, stdout } = await runDeployScript(
+        "deno run --allow-all script.ts set --release-branch release/v1",
+        setInput({ nextVersionName: "v1.0.0", testMode: false }, []),
       );
 
       assertEquals(code, 0);
@@ -536,7 +590,8 @@ Deno.test(
       assertStringIncludes(stdoutText(stdout), "release create");
       assertStringIncludes(stdoutText(stdout), "v1.0.0");
     } finally {
-      cleanup();
+      ghCleanup();
+      gitCleanup();
     }
   },
 );
