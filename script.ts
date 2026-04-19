@@ -99,8 +99,6 @@ export const getLatestReleaseFromGitHubReleases = async (
 
 export const createGitHubRelease = async (args: string[] = []): Promise<void> => {
   const input = getDeployStepInput();
-  const releaseInput = getLatestReleaseStepInput();
-
   // --release-branch is required; all other args are forwarded to `gh release create`
   const parsed = parseArgs(args, {
     string: ["release-branch"],
@@ -114,13 +112,15 @@ export const createGitHubRelease = async (args: string[] = []): Promise<void> =>
     Deno.exit(1);
   }
 
-  // Get the latest commit on the release branch from the input data
-  const releaseBranchCommits = releaseInput.gitCommitsAllLocalBranches[releaseBranch];
-  if (!releaseBranchCommits || releaseBranchCommits.length === 0) {
-    console.error(`Could not find commits for release branch: ${releaseBranch}. Cannot determine target commit.`);
+  // Get the latest commit on the release branch by running git directly,
+  // since the input data may be out of date.
+  // It's preferred to use the decaf sdk, but using this workaround because if you create a new commit on the release branch and then run this script all in the same 
+  // decaf step, the input data won't have the new commit on the release branch since the input data is generated at the start of the step.
+  const latestReleaseBranchCommit = await $`git rev-parse ${releaseBranch}`.text().catch(() => null);
+  if (!latestReleaseBranchCommit) {
+    console.error(`Could not determine latest commit for release branch: ${releaseBranch}.`);
     Deno.exit(1);
   }
-  const latestReleaseBranchCommit = releaseBranchCommits[0].sha;
 
   // Build gh passthrough args from parsed, simply by dropping the release-branch key
   const { "release-branch": _rb, r: _r, _: positionals, ...ghFlags } = parsed;
