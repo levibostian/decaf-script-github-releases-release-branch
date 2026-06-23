@@ -13,10 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up Deno
-        uses: denoland/setup-deno@v1
-        with:
-          deno-version: v2.x
+      - uses: jdx/mise-action@v4
 
       - uses: levibostian/decaf@0.16.0
         env:
