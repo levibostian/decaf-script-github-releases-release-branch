@@ -246,6 +246,9 @@ Examples:
 }
 
 if (import.meta.main) {
+  // Change to the working directory specified by the decaf environment
+  Deno.chdir(Deno.env.get("DECAF_ROOT_WORKING_DIRECTORY")!);
+
   // Check for help flag
   if (Deno.args.includes("--help") || Deno.args.includes("-h")) {
     showHelp();
