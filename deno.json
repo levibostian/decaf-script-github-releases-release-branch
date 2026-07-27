@@ -1,18 +1,4 @@
 {
-  "name": "@levibostian/decaf-script-github-releases-release-branch",
-  "license": "MIT",
-  "exports": {
-    ".": "./script.ts"
-  },
-  "publish": {
-    "include": [
-      "LICENSE",
-      "README.md",
-      "script.ts",
-      "deno.json",
-      "deno.lock"
-    ]
-  },
   "imports": {
     "@levibostian/decaf-sdk": "jsr:@levibostian/decaf-sdk@0.7.0",
     "@david/dax": "jsr:@david/dax@0.43.2",
@@ -24,6 +10,6 @@
   "tasks": {
     "test": "deno test --allow-all --junit-path reports/junit.xml --coverage=reports/coverage/",
     "lint": "deno lint --fix",
-    "compile": "deno compile --output $OUTPUT_FILE_NAME --allow-env --allow-net --allow-run --allow-read --allow-write --target $DENO_TARGET script.ts"
+    "run": "deno run --quiet --allow-env --allow-net --allow-run --allow-read --allow-write script.ts"
   }
 }
