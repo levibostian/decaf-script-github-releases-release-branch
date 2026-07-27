@@ -20,11 +20,11 @@ Run using decaf's `shebang` command in your deployment workflow.
 ```yaml
 - uses: levibostian/decaf
   with:
-    get_latest_release_current_branch: decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get --release-branch main
+    get_latest_release_current_branch: decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get --release-branch main
     deploy: |
       # your deployment scripts here...
       # at some point (if using GitHub Releases as single source of truth run at the very end) create a new release with the script
-      decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main
+      decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main
     # Other decaf arguments...
 ```
 
@@ -34,8 +34,8 @@ Replace `<version-here>` with a [release](https://github.com/levibostian/decaf-s
 
 ```bash
 decaf \
-  --get-latest-release-current-branch "decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get --release-branch main" \
-  --deploy "your-script-here && decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main"
+  --get-latest-release-current-branch "decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get --release-branch main" \
+  --deploy "your-script-here && decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main"
 ```
 
 > Note: Replace `your-script-here` with whatever commands you need to run as part of the deployment process before creating the release. Be sure to run the script *last* because once you create the release, decaf will consider the deployment successful and if you re-run decaf, it will not attempt to re-attempt the deployment.
@@ -82,10 +82,10 @@ This approach ensures that when you are running on a separate branch (e.g. `main
 Example usage:
 
 ```bash 
-decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get --release-branch release/v1
+decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get --release-branch release/v1
 
 # Short alias for --release-branch
-decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get -r release/v1
+decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> get -r release/v1
 ```
 
 ### Set/Create Release
@@ -100,10 +100,10 @@ Example usage:
 
 ```bash
 # Use the default settings to create the release
-decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main
+decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main
 
 # Or, with custom GitHub CLI arguments
-decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main --draft
+decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main --draft
 ```
 
 ### Set GitHub Release Assets
@@ -119,8 +119,8 @@ Example usage:
 ```bash
 # After your deployment script runs, set the assets to upload. 
 # Each asset follows the format: `"path/to/file#Display Name"`
-decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
+decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set-assets "dist/binary-linux#Linux Binary" "dist/binary-mac#Mac Binary"
 
 # Then create the release (it will automatically include the assets)
-decaf shebang git@github.com:levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main
+decaf shebang https://github.com/levibostian/decaf-script-github-releases-release-branch.git/shebang.sh@<version-here> set --release-branch main
 ```
