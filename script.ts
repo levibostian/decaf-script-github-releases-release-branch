@@ -246,9 +246,6 @@ Examples:
 }
 
 if (import.meta.main) {
-  // Change to the working directory specified by the decaf environment
-  Deno.chdir(Deno.env.get("DECAF_ROOT_WORKING_DIRECTORY")!);
-
   // Check for help flag
   if (Deno.args.includes("--help") || Deno.args.includes("-h")) {
     showHelp();
@@ -277,6 +274,9 @@ if (import.meta.main) {
         Deno.exit(1);
       }
 
+      const input = getLatestReleaseStepInput();
+      Deno.chdir(input.gitRootDirectory);
+
       const latestRelease = await getLatestReleaseFromGitHubReleases(
         releaseBranch,
       );
@@ -287,11 +287,17 @@ if (import.meta.main) {
     }
     case "set":
     case "set-latest-release": {
+      const input = getDeployStepInput();
+      Deno.chdir(input.gitRootDirectory);
+
       await createGitHubRelease(commandArgs);
       break;
     }
     case "set-assets":
     case "set-github-release-assets": {
+      const input = getDeployStepInput();
+      Deno.chdir(input.gitRootDirectory);
+
       if (commandArgs.length === 0) {
         console.error("Error: set-assets command requires at least one asset argument");
         console.error("Usage: script.ts set-assets <asset1> [asset2...]");
